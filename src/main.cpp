@@ -1,5 +1,8 @@
 #include "main.h"
 
+// Define the global controller (declared `extern` in EZ-Template util.hpp)
+pros::Controller master(pros::E_CONTROLLER_MASTER);
+
 /////
 // For installation, upgrading, documentations, and tutorials, check out our website!
 // https://ez-robotics.github.io/EZ-Template/
@@ -8,8 +11,8 @@
 // Chassis constructor
 ez::Drive chassis(
     // These are your drive motors, the first motor is used for sensing!
-    {1, 2},     // Left Chassis Ports (negative port will reverse it!)
-    {-3, -4},  // Right Chassis Ports (negative port will reverse it!)
+    {-1, -2},     // Left Chassis Ports (negative port will reverse it!)
+    {3, 4},  // Right Chassis Ports (negative port will reverse it!)
 
     7,      // IMU Port
     3,  // Wheel Diameter (Remember, 4" wheels without screw holes are actually 4.125!)
@@ -156,6 +159,9 @@ void screen_print_tracker(ez::tracking_wheel *tracker, std::string name, int lin
  */
 void ez_screen_task() {
   while (true) {
+
+		int strafe = master.get_analog(ANALOG_LEFT_X); // update strafe each loop
+		strafe_mg.move(strafe);
     // Only run this when not connected to a competition switch
     if (!pros::competition::is_connected()) {
       // Blank page for odom debugging
@@ -200,7 +206,7 @@ void ez_template_extras() {
   if (!pros::competition::is_connected()) {
     // PID Tuner
     // - after you find values that you're happy with, you'll have to set them in auton.cpp
-
+    chassis.pid_tuner_disable();  // Start with the PID tuner disabled just in case
     // Enable / Disable PID Tuner
     //  When enabled:
     //  * use A and Y to increment / decrement the constants
@@ -240,21 +246,274 @@ void ez_template_extras() {
  * task, not resume it from where it left off.
  */
 void opcontrol() {
+	pros::MotorGroup left_mg({3, 4});    // Creates a motor group withreversed ports 19, 20, 11
+	pros::MotorGroup right_mg({-1, -2});  // Creates a motor group with forwards ports 8, 10, 12
+	pros::MotorGroup strafe_mg({5}); // strafe motor with port 5
+	pros::MotorGroup intake_mg({-6, 7});  // Creates a motor group with forward ports 6, 7
+	pros::MotorGroup intake_Roller_mg({7});  // Creates a motor group with forward ports 7
+	pros::MotorGroup score2_mg({-8});
+	pros::MotorGroup outtake_mg({-9});
+	pros::MotorGroup drive_mg({3, 4, -1, -2});
+	pros::ADIDigitalOut match_Load('H',LOW); // creates a digital output on port H for the matchload
+	pros::ADIButton button('A');
+	pros::ADIDigitalIn limit_switch('B'); // Limit switch on port B for counting
+	pros::MotorGroup counting_mg({21});
+
+
+
   // This is preference to what you like to drive on
-  chassis.drive_brake_set(MOTOR_BRAKE_HOLD);  // Hold is generally better for driver control, but coast can be used for a more "floaty" feel
+  	chassis.drive_brake_set(MOTOR_BRAKE_HOLD);  // Hold is generally better for driver control, but coast can be used for a more "floaty" feel
+
+
+
+
+  pros::Motor motor1(1);
+	pros::Motor motor2(2);
+	pros::Motor motor3(3);
+	pros::Motor motor4(4);
+	pros::Motor motor5(5);
+	pros::Motor motor6(6);
+	pros::Motor motor7(7);
+	pros::Motor motor8(8);
+
+  bool prev_up = false;
+	bool prev_left = false;
+
+	int color = 0; // 0 = none,  1 = blue,  -1 = red
+	int driveSpeed=127; // drive speed
+	int scoreMotor=100; // defines the scoreMotor variable
+	int intakeSpeed=100; // intake speed
+	int scoreSpeed=100; // outtake speed
+
 
   while (true) {
+
+		// Temperature toggle handling (independent of intake buttons)
+		bool up = master.get_digital(DIGITAL_UP);
+		static bool showTemps = false;
+		static std::uint32_t lastTempUpdate = 0;
+		const std::uint32_t tempInterval = 900; // ms (slower scroll)
+
+    //temperature dysplaying code
+if (up && !prev_up) { // rising edge -> toggle
+			showTemps = !showTemps;
+			if (!showTemps) {
+				master.clear_line(0);
+				master.clear_line(1);
+			} else {
+				// immediate first update
+				lastTempUpdate = pros::millis();
+				int t1 = motor1.get_temperature();
+				int t2 = motor2.get_temperature();
+				int t3 = motor3.get_temperature();
+				int t4 = motor4.get_temperature();
+				int t5 = motor5.get_temperature();
+				int t6 = motor6.get_temperature();
+				int t7 = motor7.get_temperature();
+				int t8 = motor8.get_temperature();
+				char buf0[64];
+				char buf1[64];
+				std::snprintf(buf0, sizeof(buf0), "M1:%dC M2:%dC M3:%dC M4:%dC", t1, t2, t3, t4);
+				std::snprintf(buf1, sizeof(buf1), "M5:%dC M6:%dC M7:%dC M8:%dC", t5, t6, t7, t8);
+				// initialize scrolling strings and state
+				static std::string scroll0;
+				static std::string scroll1;
+				static int pos0 = 0;
+				static int pos1 = 0;
+				static int dir0 = 1;
+				static int dir1 = 1;
+				const int displayWidth = 15; // controller columns [0..14]
+
+				scroll0 = std::string(buf0);
+				scroll1 = std::string(buf1);
+
+				if ((int)scroll0.size() <= displayWidth) {
+					master.set_text(0, 0, scroll0.c_str());
+				} else {
+					int maxStart = (int)scroll0.size() - displayWidth;
+					if (pos0 < 0) pos0 = 0;
+					if (pos0 > maxStart) pos0 = maxStart;
+					std::string out = scroll0.substr(pos0, displayWidth);
+					master.set_text(0, 0, out.c_str());
+					// prepare for next tick
+					pos0 += dir0;
+					if (pos0 >= maxStart) { pos0 = maxStart; dir0 = -1; }
+					else if (pos0 <= 0) { pos0 = 0; dir0 = 1; }
+				}
+
+				if ((int)scroll1.size() <= displayWidth) {
+					master.set_text(1, 0, scroll1.c_str());
+				} else {
+					int maxStart = (int)scroll1.size() - displayWidth;
+					if (pos1 < 0) pos1 = 0;
+					if (pos1 > maxStart) pos1 = maxStart;
+					std::string out1 = scroll1.substr(pos1, displayWidth);
+					master.set_text(1, 0, out1.c_str());
+					pos1 += dir1;
+					if (pos1 >= maxStart) { pos1 = maxStart; dir1 = -1; }
+					else if (pos1 <= 0) { pos1 = 0; dir1 = 1; }
+				}
+			}
+		}
+
+		if (showTemps && (pros::millis() - lastTempUpdate >= tempInterval)) {
+			int t1 = motor1.get_temperature();
+			int t2 = motor2.get_temperature();
+			int t3 = motor3.get_temperature();
+			int t4 = motor4.get_temperature();
+			int t5 = motor5.get_temperature();
+			int t6 = motor6.get_temperature();
+			int t7 = motor7.get_temperature();
+			int t8 = motor8.get_temperature();
+				char buf0[64];
+				char buf1[64];
+				std::snprintf(buf0, sizeof(buf0), "M1:%dC M2:%dC M3:%dC M4:%dC", t1, t2, t3, t4);
+				std::snprintf(buf1, sizeof(buf1), "M5:%dC M6:%dC M7:%dC M8:%dC", t5, t6, t7, t8);
+				static std::string scroll0;
+				static std::string scroll1;
+				static int pos0 = 0;
+				static int pos1 = 0;
+				static int dir0 = 1;
+				static int dir1 = 1;
+				const int displayWidth = 15; // controller columns [0..14]
+
+				scroll0 = std::string(buf0);
+				scroll1 = std::string(buf1);
+
+				if ((int)scroll0.size() <= displayWidth) {
+					master.set_text(0, 0, scroll0.c_str());
+				} else {
+					int maxStart = (int)scroll0.size() - displayWidth;
+					if (pos0 < 0) pos0 = 0;
+					if (pos0 > maxStart) pos0 = maxStart;
+					std::string out = scroll0.substr(pos0, displayWidth);
+					master.set_text(0, 0, out.c_str());
+					pos0 += dir0;
+					if (pos0 >= maxStart) { pos0 = maxStart; dir0 = -1; }
+					else if (pos0 <= 0) { pos0 = 0; dir0 = 1; }
+				}
+
+				if ((int)scroll1.size() <= displayWidth) {
+					master.set_text(1, 0, scroll1.c_str());
+				} else {
+					int maxStart = (int)scroll1.size() - displayWidth;
+					if (pos1 < 0) pos1 = 0;
+					if (pos1 > maxStart) pos1 = maxStart;
+					std::string out1 = scroll1.substr(pos1, displayWidth);
+					master.set_text(1, 0, out1.c_str());
+					pos1 += dir1;
+					if (pos1 >= maxStart) { pos1 = maxStart; dir1 = -1; }
+					else if (pos1 <= 0) { pos1 = 0; dir1 = 1; }
+				}
+			lastTempUpdate = pros::millis();
+		}
+
+		prev_up = up;
+
     // Gives you some extras to make EZ-Template ezier
     ez_template_extras();
 
-    chassis.opcontrol_tank();  // Tank control
+    chassis.opcontrol_arcade_standard(ez::SPLIT);  // Standard split arcade
     // chassis.opcontrol_arcade_standard(ez::SPLIT);   // Standard split arcade
     // chassis.opcontrol_arcade_standard(ez::SINGLE);  // Standard single arcade
     // chassis.opcontrol_arcade_flipped(ez::SPLIT);    // Flipped split arcade
     // chassis.opcontrol_arcade_flipped(ez::SINGLE);   // Flipped single arcade
 
     // . . .
-    // Put more user control code here!
+		// Outtake control
+		if (master.get_digital(DIGITAL_R1)) {
+			outtake_mg.move(scoreSpeed); // Move outtake forward
+			pros::lcd::set_text(4, "Outtake Forward!");
+		} else if (master.get_digital(DIGITAL_R2)) {
+			outtake_mg.move(-scoreSpeed); // move motor backwards
+			pros::lcd::set_text(4, "Outtake Reverse!");
+		} else {
+			outtake_mg.move(0); // stops outtake
+			pros::lcd::set_text(4, "Outtake Stopped Color Mismatch.");
+		}
+
+		// Outtake control
+		if (master.get_digital(DIGITAL_R1)) {
+			outtake_mg.move(scoreSpeed); // Move outtake forward
+			pros::lcd::set_text(4, "Outtake Forward!");
+		} else if (master.get_digital(DIGITAL_R2)) {
+			outtake_mg.move(-scoreSpeed); // move motor backwards
+			pros::lcd::set_text(4, "Outtake Reverse!");
+		} else {
+			outtake_mg.move(0); // stops outtake
+			pros::lcd::set_text(4, "Outtake Stopped Color Mismatch.");
+		}
+
+			//Intake/outtake controll
+		if (master.get_digital(DIGITAL_L1)) // if the top left trigger is pressed
+		{
+			intake_mg.move(intakeSpeed); // Move outtake forward
+			score2_mg.move(intakeSpeed);
+			pros::lcd::set_text(4, "Intake Forward!");
+		}
+		else if (master.get_digital(DIGITAL_L2)) // if the bottom left trigger is pressed
+		{
+			intake_mg.move(-intakeSpeed); // move motor backwards
+			score2_mg.move(-intakeSpeed);
+			pros::lcd::set_text(4, "Intake Reverse!");
+		}
+		else // If none are pressed
+		{
+			intake_mg.move(0); // stops outtake
+			score2_mg.move(0);
+			pros::lcd::set_text(4, "Intake Stopped.");
+		}
+
+
+		if (master.get_digital(DIGITAL_LEFT))
+		{
+			intake_Roller_mg.move(intakeSpeed);
+		}
+		else if (master.get_digital(DIGITAL_A))
+		{
+			intake_Roller_mg.move(-intakeSpeed);
+		}
+		else
+		{
+			// If neither X nor B are pressed, only stop score2_mg when intake isn't active
+			if (!master.get_digital(DIGITAL_L1) && !master.get_digital(DIGITAL_L2)) {
+				intake_Roller_mg.move(0);
+			}
+		}
+
+
+		if (master.get_digital(DIGITAL_DOWN))
+		{
+			score2_mg.move(intakeSpeed);
+		}
+		else if (master.get_digital(DIGITAL_B))
+		{
+			score2_mg.move(-intakeSpeed);
+		}
+		else
+		{
+			// If neither X nor B are pressed, only stop score2_mg when intake isn't active
+			if (!master.get_digital(DIGITAL_L1) && !master.get_digital(DIGITAL_L2)) {
+				score2_mg.move(0);
+			}
+		}
+
+		
+		// Match load control
+
+	if (master.get_digital(DIGITAL_Y)) // if the top right trigger is pressed
+		{
+			match_Load.set_value(LOW); // Clamp
+			pros::lcd::set_text(4, "Clamp!");
+		}
+		else if (master.get_digital(DIGITAL_RIGHT)) // if the bottom left trigger is pressed
+		{
+			match_Load.set_value(HIGH); // Unclamp
+			pros::lcd::set_text(4, "Unclamp!");
+
+		}
+
+
     // . . .
 
     pros::delay(ez::util::DELAY_TIME);  // This is used for timer calculations!  Keep this ez::util::DELAY_TIME
